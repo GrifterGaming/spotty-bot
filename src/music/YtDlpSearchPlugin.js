@@ -69,7 +69,7 @@ const COOKIE_ARGS = process.env.YTDLP_COOKIES ? ['--cookies', YTDLP_COOKIES_PATH
 // JSON payload, which breaks that parse on every call — confirmed directly against
 // this project's installed yt-dlp binary. This keeps stdout/stderr separate so
 // warnings never corrupt the actual JSON.
-function runYtDlpJson(target, extraArgs = []) {
+function runYtDlpJson(target, extraArgs = [], { useCookies = true } = {}) {
   return new Promise((resolve, reject) => {
     const args = [
       target,
@@ -78,14 +78,14 @@ function runYtDlpJson(target, extraArgs = []) {
       '--skip-download',
       '--simulate',
       '--prefer-free-formats',
-      // Confirmed in production: cookie-authenticated requests (needed to avoid
-      // YouTube's bot-detection block — see COOKIE_ARGS below) hit a SABR-restricted
-      // format set for the default "web" client that leaves no usable format at all,
-      // regardless of format-selector permissiveness or the missing_pot workaround
-      // alone. The "tv" embedded client isn't subject to the same restriction.
+      // YouTube's current SABR rollout hides formats missing a "PO token" (a newer
+      // anti-bot mechanism) from the format list — this tells yt-dlp to consider
+      // them anyway. Confirmed in production: cookie-authenticated requests hit a
+      // SABR-restricted format set that leaves nothing to match otherwise. Testing
+      // whether that restriction is specifically tied to cookies being present.
       '--extractor-args',
-      'youtube:player_client=tv;formats=missing_pot',
-      ...COOKIE_ARGS,
+      'youtube:formats=missing_pot',
+      ...(useCookies ? COOKIE_ARGS : []),
       ...extraArgs,
     ];
     const child = spawn(YTDLP_PATH, args);
@@ -202,14 +202,15 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
   async getStreamURL(song) {
     await this.ready;
     if (!song.url) throw new DisTubeError('YTDLP_ERROR', 'Cannot get stream url from invalid song.');
-    // "bestaudio/best" kept failing in production ("Requested format is not
-    // available") even with the missing_pot workaround, specifically for
-    // cookie-authenticated requests from Railway's datacenter IP. Using bare "best"
-    // (a single pre-merged format, not an audio-only stream) is more permissive and
-    // avoids that — it also avoids yt-dlp's own totally-unrestricted default, which
-    // can select separate video+audio streams needing an ffmpeg merge that
-    // --simulate/--dump-single-json doesn't actually perform, leaving no usable URL.
-    const info = await runYtDlpJson(song.url, ['--format', 'best']).catch((err) => {
+    // Every video was failing here with "Requested format is not available" once
+    // cookies were introduced (to dodge YouTube's bot-detection block elsewhere) —
+    // bare "best" and the missing_pot workaround alone didn't help, and switching to
+    // the "tv" player_client broke differently ("The page needs to be reloaded",
+    // incompatible with our web-session cookies). Testing without cookies here
+    // specifically: search already works fine without needing them (thanks to
+    // --ignore-no-formats-error), so if cookies are what's triggering this
+    // restriction, going anonymous just for the actual stream lookup should avoid it.
+    const info = await runYtDlpJson(song.url, ['--format', 'best'], { useCookies: false }).catch((err) => {
       throw new DisTubeError('YTDLP_ERROR', err.message);
     });
     return info.url;
