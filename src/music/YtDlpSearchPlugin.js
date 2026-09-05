@@ -193,7 +193,14 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
   async getStreamURL(song) {
     await this.ready;
     if (!song.url) throw new DisTubeError('YTDLP_ERROR', 'Cannot get stream url from invalid song.');
-    const info = await runYtDlpJson(song.url, ['--format', 'bestaudio/best']).catch((err) => {
+    // "bestaudio/best" kept failing in production ("Requested format is not
+    // available") even with the missing_pot workaround, specifically for
+    // cookie-authenticated requests from Railway's datacenter IP. Using bare "best"
+    // (a single pre-merged format, not an audio-only stream) is more permissive and
+    // avoids that — it also avoids yt-dlp's own totally-unrestricted default, which
+    // can select separate video+audio streams needing an ffmpeg merge that
+    // --simulate/--dump-single-json doesn't actually perform, leaving no usable URL.
+    const info = await runYtDlpJson(song.url, ['--format', 'best']).catch((err) => {
       throw new DisTubeError('YTDLP_ERROR', err.message);
     });
     return info.url;
