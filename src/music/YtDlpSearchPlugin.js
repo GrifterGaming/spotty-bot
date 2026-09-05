@@ -78,13 +78,13 @@ function runYtDlpJson(target, extraArgs = []) {
       '--skip-download',
       '--simulate',
       '--prefer-free-formats',
-      // YouTube's current SABR rollout hides formats missing a "PO token" (a newer
-      // anti-bot mechanism) from the format list entirely — this tells yt-dlp to
-      // consider them anyway, since a normal format selector has nothing to match
-      // otherwise. Confirmed directly: "bestaudio/best" started failing broadly in
-      // production with "Requested format is not available" without this.
+      // Confirmed in production: cookie-authenticated requests (needed to avoid
+      // YouTube's bot-detection block — see COOKIE_ARGS below) hit a SABR-restricted
+      // format set for the default "web" client that leaves no usable format at all,
+      // regardless of format-selector permissiveness or the missing_pot workaround
+      // alone. The "tv" embedded client isn't subject to the same restriction.
       '--extractor-args',
-      'youtube:formats=missing_pot',
+      'youtube:player_client=tv;formats=missing_pot',
       ...COOKIE_ARGS,
       ...extraArgs,
     ];
