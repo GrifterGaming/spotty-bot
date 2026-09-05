@@ -34,7 +34,7 @@ const YTDLP_PACKAGE_ROOT = path.dirname(path.dirname(require.resolve('@distube/y
 const YTDLP_PATH = path.join(YTDLP_PACKAGE_ROOT, 'bin', YTDLP_FILENAME);
 
 console.log(
-  `[YtDlpSearchPlugin] platform=${process.platform} YTDLP_URL=${process.env.YTDLP_URL} YTDLP_PATH=${YTDLP_PATH} existsBeforeDownload=${fs.existsSync(YTDLP_PATH)}`,
+  `[YtDlpSearchPlugin] BUILD-MARKER-2 platform=${process.platform} YTDLP_URL=${process.env.YTDLP_URL} YTDLP_PATH=${YTDLP_PATH} existsBeforeDownload=${fs.existsSync(YTDLP_PATH)}`,
 );
 
 // @distube/yt-dlp's own json() helper concatenates stdout AND stderr into one buffer
