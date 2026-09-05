@@ -50,6 +50,19 @@ console.log(
   `[YtDlpSearchPlugin] platform=${process.platform} YTDLP_URL=${process.env.YTDLP_URL} YTDLP_PATH=${YTDLP_PATH} existsBeforeDownload=${fs.existsSync(YTDLP_PATH)}`,
 );
 
+// Cloud/datacenter IPs (Railway, AWS, etc.) get YouTube's "Sign in to confirm you're
+// not a bot" challenge far more aggressively than home ISP connections — confirmed
+// directly in production. Passing real browser cookies (exported from a logged-in
+// YouTube session) makes requests look like an authenticated real user instead of an
+// anonymous bot, avoiding that challenge. Optional: set YTDLP_COOKIES (the full
+// contents of an exported cookies.txt file) as an env var to enable this.
+const YTDLP_COOKIES_PATH = path.join(YTDLP_PACKAGE_ROOT, 'bin', 'cookies.txt');
+if (process.env.YTDLP_COOKIES) {
+  fs.writeFileSync(YTDLP_COOKIES_PATH, process.env.YTDLP_COOKIES);
+  console.log('[YtDlpSearchPlugin] wrote cookies file from YTDLP_COOKIES env var');
+}
+const COOKIE_ARGS = process.env.YTDLP_COOKIES ? ['--cookies', YTDLP_COOKIES_PATH] : [];
+
 // @distube/yt-dlp's own json() helper concatenates stdout AND stderr into one buffer
 // before calling JSON.parse() on it. Current yt-dlp releases print a "Deprecated
 // Feature" notice (about the --no-call-home flag that plugin hardcodes) ahead of the
@@ -65,6 +78,7 @@ function runYtDlpJson(target, extraArgs = []) {
       '--skip-download',
       '--simulate',
       '--prefer-free-formats',
+      ...COOKIE_ARGS,
       ...extraArgs,
     ];
     const child = spawn(YTDLP_PATH, args);
