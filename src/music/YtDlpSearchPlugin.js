@@ -33,6 +33,10 @@ const { Song, Playlist, ExtractorPlugin, DisTubeError } = require('distube');
 const YTDLP_PACKAGE_ROOT = path.dirname(path.dirname(require.resolve('@distube/yt-dlp')));
 const YTDLP_PATH = path.join(YTDLP_PACKAGE_ROOT, 'bin', YTDLP_FILENAME);
 
+console.log(
+  `[YtDlpSearchPlugin] platform=${process.platform} YTDLP_URL=${process.env.YTDLP_URL} YTDLP_PATH=${YTDLP_PATH} existsBeforeDownload=${fs.existsSync(YTDLP_PATH)}`,
+);
+
 // @distube/yt-dlp's own json() helper concatenates stdout AND stderr into one buffer
 // before calling JSON.parse() on it. Current yt-dlp releases print a "Deprecated
 // Feature" notice (about the --no-call-home flag that plugin hardcodes) ahead of the
@@ -100,8 +104,20 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
     // redo its first-run Gatekeeper security check, which took multiple minutes in
     // testing — re-downloading every restart made every bot launch that slow for the
     // first song. Set FORCE_YTDLP_UPDATE=1 to update deliberately when needed.
+    // Stored (not fire-and-forget) so callers can await it — a fresh deploy with no
+    // binary yet would otherwise race a /play right after startup against a download
+    // still in progress.
     if (process.env.FORCE_YTDLP_UPDATE || !fs.existsSync(YTDLP_PATH)) {
-      download().catch(() => {});
+      console.log('[YtDlpSearchPlugin] downloading yt-dlp binary to', YTDLP_PATH);
+      this.ready = download()
+        .then((version) =>
+          console.log(
+            `[YtDlpSearchPlugin] download finished, version=${version}, existsNow=${fs.existsSync(YTDLP_PATH)}, size=${fs.existsSync(YTDLP_PATH) ? fs.statSync(YTDLP_PATH).size : 'n/a'}`,
+          ),
+        )
+        .catch((err) => console.error('[YtDlpSearchPlugin] download FAILED:', err));
+    } else {
+      this.ready = Promise.resolve();
     }
   }
 
@@ -110,6 +126,7 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
   }
 
   async searchSong(query, options) {
+    await this.ready;
     const info = await runYtDlpJson(`ytsearch1:${query}`, ['--no-playlist']).catch((err) => {
       throw new DisTubeError('YTDLP_ERROR', err.message);
     });
@@ -118,6 +135,7 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
   }
 
   async resolve(url, options) {
+    await this.ready;
     const info = await runYtDlpJson(url).catch((err) => {
       throw new DisTubeError('YTDLP_ERROR', err.message);
     });
@@ -139,6 +157,7 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
   }
 
   async getStreamURL(song) {
+    await this.ready;
     if (!song.url) throw new DisTubeError('YTDLP_ERROR', 'Cannot get stream url from invalid song.');
     const info = await runYtDlpJson(song.url, ['--format', 'bestaudio/best']).catch((err) => {
       throw new DisTubeError('YTDLP_ERROR', err.message);
