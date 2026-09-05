@@ -47,9 +47,13 @@ distube
   })
   .on('error', (error, queue, song) => {
     console.error('DisTube error:', error);
-    queue?.textChannel?.send(
-      `Error playing ${song ? `**${song.name}**` : 'that song'}, skipping: ${error?.message || 'unknown error'}`,
-    );
+    // yt-dlp's underlying error message can be very long (especially in verbose
+    // debugging modes) — Discord rejects any message over 4000 characters outright
+    // (confirmed directly: DiscordAPIError[50035] Invalid Form Body), which was
+    // silently swallowing our own error-reporting message. Truncate defensively.
+    const prefix = `Error playing ${song ? `**${song.name}**` : 'that song'}, skipping: `;
+    const detail = (error?.message || 'unknown error').slice(0, 1900 - prefix.length);
+    queue?.textChannel?.send(prefix + detail).catch((err) => console.error('Failed to send error message:', err));
   });
 
 // DisTube v5 doesn't auto-leave an empty voice channel, so watch for it ourselves.
