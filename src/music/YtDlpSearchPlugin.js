@@ -136,14 +136,11 @@ function runYtDlpJson(target, extraArgs = [], { useCookies = true } = {}) {
       '--skip-download',
       '--simulate',
       '--prefer-free-formats',
-      // YouTube's current SABR rollout hides formats missing a "PO token" (a newer
-      // anti-bot mechanism) from the format list. If the bgutil PO token plugin is
-      // installed and its server (potProvider.js) is running, yt-dlp generates a
-      // real one automatically — no extra flag needed for that part. This flag is
-      // kept as a fallback so things degrade gracefully (metadata still returned)
-      // if the plugin isn't available, rather than failing outright.
-      '--extractor-args',
-      'youtube:formats=missing_pot',
+      // Confirmed in production logs: with this flag present, yt-dlp lists
+      // bgutil:http as an available PO token provider but never actually calls it —
+      // telling yt-dlp "show me formats even without a token" apparently makes it
+      // skip trying to fetch a real one at all. Removed now that a real provider
+      // (potProvider.js) is running, so yt-dlp should actually use it.
       ...(useCookies ? COOKIE_ARGS : []),
       ...extraArgs,
     ];
