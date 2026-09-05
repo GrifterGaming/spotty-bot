@@ -25,7 +25,6 @@ if (!process.env.YTDLP_URL) {
 const YTDLP_FILENAME = process.platform === 'win32' ? 'yt-dlp-standalone.exe' : 'yt-dlp-standalone';
 process.env.YTDLP_FILENAME = YTDLP_FILENAME;
 
-const { download } = require('@distube/yt-dlp');
 const { Song, Playlist, ExtractorPlugin, DisTubeError } = require('distube');
 
 // require.resolve('@distube/yt-dlp/package.json') is blocked by that package's own
@@ -33,8 +32,22 @@ const { Song, Playlist, ExtractorPlugin, DisTubeError } = require('distube');
 const YTDLP_PACKAGE_ROOT = path.dirname(path.dirname(require.resolve('@distube/yt-dlp')));
 const YTDLP_PATH = path.join(YTDLP_PACKAGE_ROOT, 'bin', YTDLP_FILENAME);
 
+// @distube/yt-dlp exports its own download() helper, but it has a real bug: it calls
+// fs.writeFile() without awaiting it, so the returned promise resolves before the
+// binary is actually finished writing to disk — confirmed directly in production
+// (its own success log line was immediately followed by the file still not existing).
+// This reimplements the download properly, fully awaited, using Node's built-in
+// fetch (which already follows redirects) instead of that library's helper.
+async function downloadYtDlp() {
+  const res = await fetch(process.env.YTDLP_URL);
+  if (!res.ok) throw new Error(`Failed to download yt-dlp: HTTP ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  await fs.promises.mkdir(path.dirname(YTDLP_PATH), { recursive: true });
+  await fs.promises.writeFile(YTDLP_PATH, buffer, { mode: 0o755 });
+}
+
 console.log(
-  `[YtDlpSearchPlugin] BUILD-MARKER-2 platform=${process.platform} YTDLP_URL=${process.env.YTDLP_URL} YTDLP_PATH=${YTDLP_PATH} existsBeforeDownload=${fs.existsSync(YTDLP_PATH)}`,
+  `[YtDlpSearchPlugin] platform=${process.platform} YTDLP_URL=${process.env.YTDLP_URL} YTDLP_PATH=${YTDLP_PATH} existsBeforeDownload=${fs.existsSync(YTDLP_PATH)}`,
 );
 
 // @distube/yt-dlp's own json() helper concatenates stdout AND stderr into one buffer
@@ -109,10 +122,10 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
     // still in progress.
     if (process.env.FORCE_YTDLP_UPDATE || !fs.existsSync(YTDLP_PATH)) {
       console.log('[YtDlpSearchPlugin] downloading yt-dlp binary to', YTDLP_PATH);
-      this.ready = download()
-        .then((version) =>
+      this.ready = downloadYtDlp()
+        .then(() =>
           console.log(
-            `[YtDlpSearchPlugin] download finished, version=${version}, existsNow=${fs.existsSync(YTDLP_PATH)}, size=${fs.existsSync(YTDLP_PATH) ? fs.statSync(YTDLP_PATH).size : 'n/a'}`,
+            `[YtDlpSearchPlugin] download finished, existsNow=${fs.existsSync(YTDLP_PATH)}, size=${fs.existsSync(YTDLP_PATH) ? fs.statSync(YTDLP_PATH).size : 'n/a'}`,
           ),
         )
         .catch((err) => console.error('[YtDlpSearchPlugin] download FAILED:', err));
