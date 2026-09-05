@@ -132,14 +132,15 @@ function runYtDlpJson(target, extraArgs = [], { useCookies = true } = {}) {
       '--skip-download',
       '--simulate',
       '--prefer-free-formats',
-      // Forcing player_client=web (to make the PO token provider actually get used,
-      // instead of the auto-selected "visionos" client which ignores it entirely)
-      // made requests hang indefinitely in production — worse than the clean
-      // failures we had before. Reverting to the pre-PO-token-integration
-      // configuration: auto-selected client + missing_pot, which resolves
-      // reliably (some videos fail with a clear SABR error, but nothing hangs).
+      // player_client=web is needed to make the PO token provider actually get
+      // used at all — the auto-selected "visionos" client ignores it entirely.
+      // Forcing it previously hung with the Rust-based token server; testing
+      // again now with the official Node.js server (potProvider.js) in case that
+      // was a protocol/version mismatch specific to the Rust reimplementation.
+      // missing_pot stays as a fallback so things still degrade gracefully
+      // (metadata/formats returned) if token generation itself fails outright.
       '--extractor-args',
-      'youtube:formats=missing_pot',
+      'youtube:player_client=web;formats=missing_pot',
       ...(useCookies ? COOKIE_ARGS : []),
       ...extraArgs,
     ];
