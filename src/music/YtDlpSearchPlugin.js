@@ -202,15 +202,14 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
   async getStreamURL(song) {
     await this.ready;
     if (!song.url) throw new DisTubeError('YTDLP_ERROR', 'Cannot get stream url from invalid song.');
-    // Every video was failing here with "Requested format is not available" once
-    // cookies were introduced (to dodge YouTube's bot-detection block elsewhere) —
-    // bare "best" and the missing_pot workaround alone didn't help, and switching to
-    // the "tv" player_client broke differently ("The page needs to be reloaded",
-    // incompatible with our web-session cookies). Testing without cookies here
-    // specifically: search already works fine without needing them (thanks to
-    // --ignore-no-formats-error), so if cookies are what's triggering this
-    // restriction, going anonymous just for the actual stream lookup should avoid it.
-    const info = await runYtDlpJson(song.url, ['--format', 'best'], { useCookies: false }).catch((err) => {
+    // Confirmed in production: this fails one way or the other right now on cloud
+    // hosts. Without cookies -> flat "Sign in to confirm you're not a bot" block.
+    // With cookies -> passes that, but hits YouTube's newer SABR restriction, which
+    // leaves no usable format regardless of selector permissiveness or the
+    // missing_pot workaround. Keeping cookies here since the no-cookies failure mode
+    // is strictly worse (blocks everything, vs. SABR which may not affect every
+    // video/account). See README for the current state of this limitation.
+    const info = await runYtDlpJson(song.url, ['--format', 'best']).catch((err) => {
       throw new DisTubeError('YTDLP_ERROR', err.message);
     });
     return info.url;
