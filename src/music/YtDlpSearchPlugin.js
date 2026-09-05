@@ -128,7 +128,11 @@ function runYtDlpJson(target, extraArgs = [], { useCookies = true } = {}) {
     const args = [
       target,
       '--dump-single-json',
-      '--no-warnings',
+      // Temporarily verbose (not --no-warnings) while debugging the new PO token
+      // integration — need to see what's actually happening with token generation,
+      // not just the final error line. -v/warnings go to stderr, so this doesn't
+      // corrupt the --dump-single-json output on stdout that we JSON.parse below.
+      '-v',
       '--skip-download',
       '--simulate',
       '--prefer-free-formats',
