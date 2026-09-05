@@ -2,22 +2,28 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-// @distube/yt-dlp defaults to downloading the plain "yt-dlp" asset, which is a
-// Python zipapp requiring a system Python 3.10+ interpreter — often missing or
-// outdated (e.g. macOS's bundled Python) both locally and on minimal cloud/Docker
-// hosts. Point it at the platform's self-contained standalone binary instead, which
-// bundles its own runtime and needs nothing else installed. Must be set before
-// requiring the package (and set here, not in a caller, so this holds regardless of
-// how/where this plugin gets required — including standalone scripts/tests).
+// @distube/yt-dlp's own postinstall script (which npm runs automatically on every
+// `npm install`, before any of our code ever executes) downloads the plain "yt-dlp"
+// asset to its default filename — a Python zipapp requiring a system Python 3.10+
+// interpreter that most hosts (including Railway's Node build image) don't have.
+// Confirmed directly: that produced "env: 'python3': No such file or directory" in
+// production. We want the platform's self-contained standalone build instead, which
+// bundles its own runtime — but downloading over that SAME default filename doesn't
+// help, because our "skip download if the file already exists" check (below) would
+// then see postinstall's file already sitting there and never fix it. So this saves
+// to a distinctly-named file instead, entirely independent of whatever postinstall
+// downloaded — we never read or depend on that default file at all.
+const YTDLP_ASSET_BY_PLATFORM = {
+  darwin: 'yt-dlp_macos',
+  win32: 'yt-dlp.exe',
+  linux: 'yt-dlp_linux',
+};
+const YTDLP_ASSET = YTDLP_ASSET_BY_PLATFORM[process.platform] || 'yt-dlp_linux';
 if (!process.env.YTDLP_URL) {
-  const YTDLP_ASSET_BY_PLATFORM = {
-    darwin: 'yt-dlp_macos',
-    win32: 'yt-dlp.exe',
-    linux: 'yt-dlp_linux',
-  };
-  const asset = YTDLP_ASSET_BY_PLATFORM[process.platform] || 'yt-dlp_linux';
-  process.env.YTDLP_URL = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${asset}`;
+  process.env.YTDLP_URL = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YTDLP_ASSET}`;
 }
+const YTDLP_FILENAME = process.platform === 'win32' ? 'yt-dlp-standalone.exe' : 'yt-dlp-standalone';
+process.env.YTDLP_FILENAME = YTDLP_FILENAME;
 
 const { download } = require('@distube/yt-dlp');
 const { Song, Playlist, ExtractorPlugin, DisTubeError } = require('distube');
@@ -25,11 +31,7 @@ const { Song, Playlist, ExtractorPlugin, DisTubeError } = require('distube');
 // require.resolve('@distube/yt-dlp/package.json') is blocked by that package's own
 // "exports" map, so derive the package root from its main entry point instead.
 const YTDLP_PACKAGE_ROOT = path.dirname(path.dirname(require.resolve('@distube/yt-dlp')));
-const YTDLP_PATH = path.join(
-  YTDLP_PACKAGE_ROOT,
-  'bin',
-  process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp',
-);
+const YTDLP_PATH = path.join(YTDLP_PACKAGE_ROOT, 'bin', YTDLP_FILENAME);
 
 // @distube/yt-dlp's own json() helper concatenates stdout AND stderr into one buffer
 // before calling JSON.parse() on it. Current yt-dlp releases print a "Deprecated
