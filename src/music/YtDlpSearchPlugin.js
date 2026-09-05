@@ -50,19 +50,46 @@ async function downloadStandaloneYtDlp() {
   await fs.promises.writeFile(YTDLP_STANDALONE_PATH, buffer, { mode: 0o755 });
 }
 
+function checkSystemYtDlp() {
+  const check = spawnSync('yt-dlp', ['--version']);
+  return check.status === 0 ? check.stdout.toString().trim() : null;
+}
+
 // Prefer a system yt-dlp (pip-installed) if one is on PATH: it's a real Python
 // install, not a frozen binary, so it can load the PO token plugin that lets
-// getStreamURL actually work around YouTube's SABR restrictions in production
-// (nixpacks.toml pip-installs it there). Falls back to downloading our own
-// standalone binary otherwise — fine for local dev, which doesn't need PO tokens.
+// getStreamURL actually work around YouTube's SABR restrictions in production.
+// railpack.json makes python3/pip available in the deploy image there; this pip
+// installs yt-dlp + the plugin itself the first time (simpler and more portable
+// than fighting the build system's own install-phase config for this). Falls back
+// to downloading our own standalone binary otherwise — fine for local dev, which
+// doesn't need PO tokens.
 async function resolveYtDlp() {
-  const systemCheck = spawnSync('yt-dlp', ['--version']);
-  if (systemCheck.status === 0) {
+  let version = checkSystemYtDlp();
+  if (version) {
     YTDLP_PATH = 'yt-dlp';
-    console.log(
-      `[YtDlpSearchPlugin] using system yt-dlp on PATH, version=${systemCheck.stdout.toString().trim()}`,
-    );
+    console.log(`[YtDlpSearchPlugin] using system yt-dlp on PATH, version=${version}`);
     return;
+  }
+
+  const pipCheck = spawnSync('pip3', ['--version']);
+  if (pipCheck.status === 0) {
+    console.log('[YtDlpSearchPlugin] python3/pip present, pip-installing yt-dlp + PO token plugin');
+    const install = spawnSync(
+      'pip3',
+      ['install', '--break-system-packages', 'yt-dlp', 'bgutil-ytdlp-pot-provider'],
+      { encoding: 'utf8' },
+    );
+    if (install.status === 0) {
+      version = checkSystemYtDlp();
+      if (version) {
+        YTDLP_PATH = 'yt-dlp';
+        console.log(`[YtDlpSearchPlugin] pip install succeeded, using system yt-dlp, version=${version}`);
+        return;
+      }
+      console.warn('[YtDlpSearchPlugin] pip install succeeded but yt-dlp still not found on PATH');
+    } else {
+      console.error('[YtDlpSearchPlugin] pip install FAILED:', install.stderr || install.stdout);
+    }
   }
 
   console.log(
