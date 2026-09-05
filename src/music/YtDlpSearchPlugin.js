@@ -161,7 +161,16 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
 
   async searchSong(query, options) {
     await this.ready;
-    const info = await runYtDlpJson(`ytsearch1:${query}`, ['--no-playlist']).catch((err) => {
+    // Confirmed via production logs: the "Requested format is not available" error
+    // was happening HERE, during search — not in getStreamURL as first assumed.
+    // --dump-single-json performs format resolution even when nothing downstream
+    // needs a playable URL yet (we only need title/id/artist to build the Song), and
+    // errors out entirely if none resolve. This flag makes it return the metadata
+    // anyway instead of failing the whole command.
+    const info = await runYtDlpJson(`ytsearch1:${query}`, [
+      '--no-playlist',
+      '--ignore-no-formats-error',
+    ]).catch((err) => {
       throw new DisTubeError('YTDLP_ERROR', err.message);
     });
     const entry = Array.isArray(info.entries) ? info.entries[0] : info;
