@@ -1,54 +1,81 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const { Song, Playlist, ExtractorPlugin, DisTubeError } = require('distube');
+const { ensurePotProvider } = require('./potProvider');
 
 // @distube/yt-dlp's own postinstall script (which npm runs automatically on every
 // `npm install`, before any of our code ever executes) downloads the plain "yt-dlp"
 // asset to its default filename — a Python zipapp requiring a system Python 3.10+
-// interpreter that most hosts (including Railway's Node build image) don't have.
-// Confirmed directly: that produced "env: 'python3': No such file or directory" in
-// production. We want the platform's self-contained standalone build instead, which
-// bundles its own runtime — but downloading over that SAME default filename doesn't
-// help, because our "skip download if the file already exists" check (below) would
-// then see postinstall's file already sitting there and never fix it. So this saves
-// to a distinctly-named file instead, entirely independent of whatever postinstall
-// downloaded — we never read or depend on that default file at all.
+// interpreter that most hosts (including Railway's default Node build image) don't
+// have. Confirmed directly: that produced "env: 'python3': No such file or
+// directory" in production. We want the platform's self-contained standalone build
+// instead, which bundles its own runtime — but downloading over that SAME default
+// filename doesn't help, because our "skip download if the file already exists"
+// check (below) would then see postinstall's file already sitting there and never
+// fix it. So this saves to a distinctly-named file instead, entirely independent of
+// whatever postinstall downloaded — we never read or depend on that default file.
 const YTDLP_ASSET_BY_PLATFORM = {
   darwin: 'yt-dlp_macos',
   win32: 'yt-dlp.exe',
   linux: 'yt-dlp_linux',
 };
 const YTDLP_ASSET = YTDLP_ASSET_BY_PLATFORM[process.platform] || 'yt-dlp_linux';
-if (!process.env.YTDLP_URL) {
-  process.env.YTDLP_URL = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YTDLP_ASSET}`;
-}
-const YTDLP_FILENAME = process.platform === 'win32' ? 'yt-dlp-standalone.exe' : 'yt-dlp-standalone';
-process.env.YTDLP_FILENAME = YTDLP_FILENAME;
-
-const { Song, Playlist, ExtractorPlugin, DisTubeError } = require('distube');
+const YTDLP_STANDALONE_URL = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YTDLP_ASSET}`;
 
 // require.resolve('@distube/yt-dlp/package.json') is blocked by that package's own
 // "exports" map, so derive the package root from its main entry point instead.
 const YTDLP_PACKAGE_ROOT = path.dirname(path.dirname(require.resolve('@distube/yt-dlp')));
-const YTDLP_PATH = path.join(YTDLP_PACKAGE_ROOT, 'bin', YTDLP_FILENAME);
+const YTDLP_STANDALONE_FILENAME = process.platform === 'win32' ? 'yt-dlp-standalone.exe' : 'yt-dlp-standalone';
+const YTDLP_STANDALONE_PATH = path.join(YTDLP_PACKAGE_ROOT, 'bin', YTDLP_STANDALONE_FILENAME);
+
+// The path/command actually spawned by runYtDlpJson — resolved once at startup (see
+// resolveYtDlp below) to either the system "yt-dlp" (pip-installed via nixpacks.toml
+// in production, so PO token plugin support works — see potProvider.js for why the
+// standalone binary can't do this) or our own downloaded standalone binary as a
+// fallback for environments (e.g. local dev) without that set up.
+let YTDLP_PATH = YTDLP_STANDALONE_PATH;
 
 // @distube/yt-dlp exports its own download() helper, but it has a real bug: it calls
 // fs.writeFile() without awaiting it, so the returned promise resolves before the
 // binary is actually finished writing to disk — confirmed directly in production
-// (its own success log line was immediately followed by the file still not existing).
-// This reimplements the download properly, fully awaited, using Node's built-in
-// fetch (which already follows redirects) instead of that library's helper.
-async function downloadYtDlp() {
-  const res = await fetch(process.env.YTDLP_URL);
+// (its own success log line was immediately followed by the file still not
+// existing). This reimplements the download properly, fully awaited, using Node's
+// built-in fetch (which already follows redirects) instead of that library's helper.
+async function downloadStandaloneYtDlp() {
+  const res = await fetch(YTDLP_STANDALONE_URL);
   if (!res.ok) throw new Error(`Failed to download yt-dlp: HTTP ${res.status}`);
   const buffer = Buffer.from(await res.arrayBuffer());
-  await fs.promises.mkdir(path.dirname(YTDLP_PATH), { recursive: true });
-  await fs.promises.writeFile(YTDLP_PATH, buffer, { mode: 0o755 });
+  await fs.promises.mkdir(path.dirname(YTDLP_STANDALONE_PATH), { recursive: true });
+  await fs.promises.writeFile(YTDLP_STANDALONE_PATH, buffer, { mode: 0o755 });
 }
 
-console.log(
-  `[YtDlpSearchPlugin] platform=${process.platform} YTDLP_URL=${process.env.YTDLP_URL} YTDLP_PATH=${YTDLP_PATH} existsBeforeDownload=${fs.existsSync(YTDLP_PATH)}`,
-);
+// Prefer a system yt-dlp (pip-installed) if one is on PATH: it's a real Python
+// install, not a frozen binary, so it can load the PO token plugin that lets
+// getStreamURL actually work around YouTube's SABR restrictions in production
+// (nixpacks.toml pip-installs it there). Falls back to downloading our own
+// standalone binary otherwise — fine for local dev, which doesn't need PO tokens.
+async function resolveYtDlp() {
+  const systemCheck = spawnSync('yt-dlp', ['--version']);
+  if (systemCheck.status === 0) {
+    YTDLP_PATH = 'yt-dlp';
+    console.log(
+      `[YtDlpSearchPlugin] using system yt-dlp on PATH, version=${systemCheck.stdout.toString().trim()}`,
+    );
+    return;
+  }
+
+  console.log(
+    `[YtDlpSearchPlugin] no system yt-dlp found, falling back to standalone binary. platform=${process.platform} url=${YTDLP_STANDALONE_URL} path=${YTDLP_STANDALONE_PATH} existsBeforeDownload=${fs.existsSync(YTDLP_STANDALONE_PATH)}`,
+  );
+  if (process.env.FORCE_YTDLP_UPDATE || !fs.existsSync(YTDLP_STANDALONE_PATH)) {
+    console.log('[YtDlpSearchPlugin] downloading standalone yt-dlp binary to', YTDLP_STANDALONE_PATH);
+    await downloadStandaloneYtDlp();
+    console.log(
+      `[YtDlpSearchPlugin] download finished, existsNow=${fs.existsSync(YTDLP_STANDALONE_PATH)}, size=${fs.existsSync(YTDLP_STANDALONE_PATH) ? fs.statSync(YTDLP_STANDALONE_PATH).size : 'n/a'}`,
+    );
+  }
+}
 
 // Cloud/datacenter IPs (Railway, AWS, etc.) get YouTube's "Sign in to confirm you're
 // not a bot" challenge far more aggressively than home ISP connections — confirmed
@@ -79,10 +106,11 @@ function runYtDlpJson(target, extraArgs = [], { useCookies = true } = {}) {
       '--simulate',
       '--prefer-free-formats',
       // YouTube's current SABR rollout hides formats missing a "PO token" (a newer
-      // anti-bot mechanism) from the format list — this tells yt-dlp to consider
-      // them anyway. Confirmed in production: cookie-authenticated requests hit a
-      // SABR-restricted format set that leaves nothing to match otherwise. Testing
-      // whether that restriction is specifically tied to cookies being present.
+      // anti-bot mechanism) from the format list. If the bgutil PO token plugin is
+      // installed and its server (potProvider.js) is running, yt-dlp generates a
+      // real one automatically — no extra flag needed for that part. This flag is
+      // kept as a fallback so things degrade gracefully (metadata still returned)
+      // if the plugin isn't available, rather than failing outright.
       '--extractor-args',
       'youtube:formats=missing_pot',
       ...(useCookies ? COOKIE_ARGS : []),
@@ -133,26 +161,16 @@ function toSong(plugin, info, options) {
 class YtDlpSearchPlugin extends ExtractorPlugin {
   constructor() {
     super();
-    // Only download when the binary is missing, not on every startup. Overwriting an
-    // already-verified binary with a fresh copy (even byte-identical) makes macOS
-    // redo its first-run Gatekeeper security check, which took multiple minutes in
-    // testing — re-downloading every restart made every bot launch that slow for the
-    // first song. Set FORCE_YTDLP_UPDATE=1 to update deliberately when needed.
     // Stored (not fire-and-forget) so callers can await it — a fresh deploy with no
-    // binary yet would otherwise race a /play right after startup against a download
-    // still in progress.
-    if (process.env.FORCE_YTDLP_UPDATE || !fs.existsSync(YTDLP_PATH)) {
-      console.log('[YtDlpSearchPlugin] downloading yt-dlp binary to', YTDLP_PATH);
-      this.ready = downloadYtDlp()
-        .then(() =>
-          console.log(
-            `[YtDlpSearchPlugin] download finished, existsNow=${fs.existsSync(YTDLP_PATH)}, size=${fs.existsSync(YTDLP_PATH) ? fs.statSync(YTDLP_PATH).size : 'n/a'}`,
-          ),
-        )
-        .catch((err) => console.error('[YtDlpSearchPlugin] download FAILED:', err));
-    } else {
-      this.ready = Promise.resolve();
-    }
+    // binary downloaded yet would otherwise race a /play right after startup
+    // against setup still in progress.
+    const ytdlpReady = resolveYtDlp().catch((err) =>
+      console.error('[YtDlpSearchPlugin] yt-dlp setup FAILED:', err),
+    );
+    const potReady = ensurePotProvider().catch((err) =>
+      console.error('[YtDlpSearchPlugin] PO token provider setup FAILED:', err),
+    );
+    this.ready = Promise.all([ytdlpReady, potReady]);
   }
 
   validate(url) {
@@ -202,13 +220,6 @@ class YtDlpSearchPlugin extends ExtractorPlugin {
   async getStreamURL(song) {
     await this.ready;
     if (!song.url) throw new DisTubeError('YTDLP_ERROR', 'Cannot get stream url from invalid song.');
-    // Confirmed in production: this fails one way or the other right now on cloud
-    // hosts. Without cookies -> flat "Sign in to confirm you're not a bot" block.
-    // With cookies -> passes that, but hits YouTube's newer SABR restriction, which
-    // leaves no usable format regardless of selector permissiveness or the
-    // missing_pot workaround. Keeping cookies here since the no-cookies failure mode
-    // is strictly worse (blocks everything, vs. SABR which may not affect every
-    // video/account). See README for the current state of this limitation.
     const info = await runYtDlpJson(song.url, ['--format', 'best']).catch((err) => {
       throw new DisTubeError('YTDLP_ERROR', err.message);
     });
