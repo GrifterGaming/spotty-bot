@@ -128,21 +128,18 @@ function runYtDlpJson(target, extraArgs = [], { useCookies = true } = {}) {
     const args = [
       target,
       '--dump-single-json',
-      // Temporarily verbose (not --no-warnings) while debugging the new PO token
-      // integration — need to see what's actually happening with token generation,
-      // not just the final error line. -v/warnings go to stderr, so this doesn't
-      // corrupt the --dump-single-json output on stdout that we JSON.parse below.
-      '-v',
+      '--no-warnings',
       '--skip-download',
       '--simulate',
       '--prefer-free-formats',
-      // Confirmed in production logs: yt-dlp was auto-selecting a "visionos" player
-      // client, which doesn't need/use a PO token at all — so our provider (which
-      // IS correctly detected as available) was never actually being invoked.
-      // Forcing the "web" client specifically, since that's the one PO tokens
-      // actually apply to.
+      // Forcing player_client=web (to make the PO token provider actually get used,
+      // instead of the auto-selected "visionos" client which ignores it entirely)
+      // made requests hang indefinitely in production — worse than the clean
+      // failures we had before. Reverting to the pre-PO-token-integration
+      // configuration: auto-selected client + missing_pot, which resolves
+      // reliably (some videos fail with a clear SABR error, but nothing hangs).
       '--extractor-args',
-      'youtube:player_client=web',
+      'youtube:formats=missing_pot',
       ...(useCookies ? COOKIE_ARGS : []),
       ...extraArgs,
     ];
