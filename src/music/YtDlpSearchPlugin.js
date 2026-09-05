@@ -136,11 +136,13 @@ function runYtDlpJson(target, extraArgs = [], { useCookies = true } = {}) {
       '--skip-download',
       '--simulate',
       '--prefer-free-formats',
-      // Confirmed in production logs: with this flag present, yt-dlp lists
-      // bgutil:http as an available PO token provider but never actually calls it —
-      // telling yt-dlp "show me formats even without a token" apparently makes it
-      // skip trying to fetch a real one at all. Removed now that a real provider
-      // (potProvider.js) is running, so yt-dlp should actually use it.
+      // Confirmed in production logs: yt-dlp was auto-selecting a "visionos" player
+      // client, which doesn't need/use a PO token at all — so our provider (which
+      // IS correctly detected as available) was never actually being invoked.
+      // Forcing the "web" client specifically, since that's the one PO tokens
+      // actually apply to.
+      '--extractor-args',
+      'youtube:player_client=web',
       ...(useCookies ? COOKIE_ARGS : []),
       ...extraArgs,
     ];
